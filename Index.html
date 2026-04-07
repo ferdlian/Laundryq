@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>LaundryQ Monitor</title>
+    <link rel="manifest" href="./manifest.json">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #F4F7F6;
+            color: #333;
+            margin: 0;
+            padding: 15px;
+        }
+        .header {
+            background: #007AFF;
+            color: white;
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 10px rgba(0, 122, 255, 0.2);
+        }
+        h2, h3 { margin: 0 0 10px 0; }
+        
+        /* Grid untuk Mesin Cuci */
+        .machine-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .machine-card {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            text-align: center;
+            border: 2px solid transparent;
+        }
+        .machine-card.idle { border-color: #34C759; } /* Hijau = Kosong */
+        .machine-card.running { border-color: #FF3B30; } /* Merah = Penuh/Jalan */
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin: 10px 0;
+            color: white;
+        }
+        .idle .status-badge { background: #34C759; }
+        .running .status-badge { background: #FF3B30; }
+        
+        .time-left { font-size: 24px; font-weight: bold; margin: 10px 0; color: #FF3B30; }
+        
+        /* Form & Antrian */
+        .card-section {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+        }
+        .input-group { display: flex; gap: 10px; margin-bottom: 10px; }
+        input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        button {
+            padding: 12px;
+            background: #007AFF;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button.start-btn { background: #34C759; width: 100%; margin-top: 10px; }
+        button.force-btn { background: #8E8E93; width: 100%; margin-top: 10px; font-size: 12px; }
+        
+        .queue-item {
+            background: #F9F9F9;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid #007AFF;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>LaundryQ Monitor</h2>
+        <p style="margin:0; font-size:14px; opacity: 0.9;">Sistem Antrian & Status Mesin</p>
+    </div>
+
+    <h3>Status Mesin</h3>
+    <div class="machine-grid" id="machineGrid">
+        </div>
+
+    <div class="card-section">
+        <h3>+ Pakaian Masuk</h3>
+        <div class="input-group">
+            <input type="text" id="custName" placeholder="Nama Pelanggan">
+            <input type="number" id="custWeight" placeholder="Berat (Kg)" style="max-width: 80px;">
+        </div>
+        <button style="width: 100%;" onclick="addQueue()">Masukan ke Antrian</button>
+    </div>
+
+    <div class="card-section">
+        <h3>Daftar Antrian</h3>
+        <div id="queueList">
+            </div>
+    </div>
+
+    <script>
+        // 1. "CMS Data" - Pengaturan Tipe Mesin
+        // Di aplikasi nyata, data ini diambil dari database backend.
+        const defaultMachines = [
+            { id: 1, name: "Mesin 1", capacity: 8, durationMin: 25, status: "idle", endTime: null, customer: null },
+            { id: 2, name: "Mesin 2", capacity: 8, durationMin: 25, status: "idle", endTime: null, customer: null },
+            { id: 3, name: "Mesin Jumbo", capacity: 15, durationMin: 40, status: "idle", endTime: null, customer: null }
+        ];
+
+        // 2. State Management (Simpan di LocalStorage)
+        let state = JSON.parse(localStorage.getItem('laundryState')) || {
+            machines: defaultMachines,
+            queue: []
+        };
+
+        function saveState() {
+            localStorage.setItem('laundryState', JSON.stringify(state));
+            render();
+        }
+
+        // 3. Fungsi Menambah Antrian Pakaian Masuk
+        function addQueue() {
+            const name = document.getElementById('custName').value;
+            const weight = document.getElementById('custWeight').value;
+            
+            if (!name || !weight) return alert("Isi nama dan berat pakaian!");
+
+            state.queue.push({
+                id: Date.now(),
+                name: name,
+                weight: Number(weight),
+                timeIn: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+            });
+
+            document.getElementById('custName').value = '';
+            document.getElementById('custWeight').value = '';
+            saveState();
+        }
+
+        // 4. Fungsi Memasukkan Antrian ke Mesin Kosong
+        function startMachine(machineId, queueId) {
+            const machine = state.machines.find(m => m.id === machineId);
+            const queueIndex = state.queue.findIndex(q => q.id === queueId);
+            const customer = state.queue[queueIndex];
+
+            if (customer.weight > machine.capacity) {
+                return alert(`Kapasitas berlebih! Mesin ini maksimal ${machine.capacity}Kg.`);
+            }
+
+            // Hitung waktu selesai (Waktu sekarang + Durasi mesin dalam milidetik)
+            const finishTime = Date.now() + (machine.durationMin * 60 * 1000);
+
+            // Update status mesin
+            machine.status = "running";
+            machine.endTime = finishTime;
+            machine.customer = customer.name;
+
+            // Hapus dari antrian
+            state.queue.splice(queueIndex, 1);
+            saveState();
+        }
+
+        // Fungsi Opsional (Untuk testing agar tidak perlu menunggu 25 menit)
+        function forceFinish(machineId) {
+            const machine = state.machines.find(m => m.id === machineId);
+            machine.status = "idle";
+            machine.endTime = null;
+            machine.customer = null;
+            saveState();
+        }
+
+        // 5. Engine Real-time Countdown
+        setInterval(() => {
+            let needsUpdate = false;
+            const now = Date.now();
+
+            state.machines.forEach(m => {
+                if (m.status === "running" && m.endTime) {
+                    if (now >= m.endTime) {
+                        // Waktu Habis, mesin kembali kosong
+                        m.status = "idle";
+                        m.endTime = null;
+                        m.customer = null;
+                        needsUpdate = true;
+                    } else {
+                        // Update UI Countdown (tanpa merender ulang seluruh DOM agar tidak berkedip)
+                        const timeLeft = Math.ceil((m.endTime - now) / 1000);
+                        const mins = String(Math.floor(timeLeft / 60)).padStart(2, '0');
+                        const secs = String(timeLeft % 60).padStart(2, '0');
+                        const timeEl = document.getElementById(`time-${m.id}`);
+                        if (timeEl) timeEl.innerText = `${mins}:${secs}`;
+                    }
+                }
+            });
+
+            if (needsUpdate) saveState();
+        }, 1000);
+
+        // 6. Render UI
+        function render() {
+            // Render Mesin
+            const machineGrid = document.getElementById('machineGrid');
+            machineGrid.innerHTML = state.machines.map(m => `
+                <div class="machine-card ${m.status}">
+                    <strong>${m.name}</strong> (${m.capacity}Kg)
+                    <br>
+                    <div class="status-badge">${m.status === 'idle' ? 'KOSONG' : 'BERJALAN'}</div>
+                    ${m.status === 'running' 
+                        ? `<div class="time-left" id="time-${m.id}">--:--</div>
+                           <small>Milik: ${m.customer}</small>
+                           <button class="force-btn" onclick="forceFinish(${m.id})">Selesaikan Paksa</button>` 
+                        : `<small>${m.durationMin} Menit</small>`
+                    }
+                </div>
+            `).join('');
+
+            // Render Antrian
+            const queueList = document.getElementById('queueList');
+            if (state.queue.length === 0) {
+                queueList.innerHTML = '<p style="text-align:center; color:#888;">Antrian kosong.</p>';
+            } else {
+                // Mencari mesin yang sedang kosong
+                const availableMachines = state.machines.filter(m => m.status === 'idle');
+                let machineSelectHtml = availableMachines.length > 0 
+                    ? `<select id="select-machine" style="padding:5px; margin-right:5px; border-radius:5px;">
+                        <option value="">Pilih Mesin...</option>
+                        ${availableMachines.map(m => `<option value="${m.id}">${m.name} (${m.capacity}Kg)</option>`).join('')}
+                       </select>`
+                    : `<small style="color:red; display:block; margin-top:5px;">Semua mesin penuh</small>`;
+
+                queueList.innerHTML = state.queue.map(q => `
+                    <div class="queue-item">
+                        <div>
+                            <strong>${q.name}</strong><br>
+                            <small>Berat: ${q.weight}Kg | Masuk: ${q.timeIn}</small>
+                        </div>
+                        <div style="text-align:right;">
+                            ${availableMachines.length > 0 
+                                ? `${machineSelectHtml}
+                                   <button class="start-btn" style="width:auto; padding:6px 10px; margin:0;" 
+                                   onclick="startMachine(document.getElementById('select-machine').value, ${q.id})">
+                                   Mulai Cuci
+                                   </button>`
+                                : machineSelectHtml
+                            }
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Inisialisasi awal
+        render();
+    </script>
+</body>
+</html>
